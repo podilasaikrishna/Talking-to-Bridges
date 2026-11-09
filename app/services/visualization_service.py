@@ -1,7 +1,12 @@
 import pandas as pd
 import numpy as np
-import plotly.express as px
-import plotly.graph_objects as go
+
+try:
+    import plotly.express as px
+    import plotly.graph_objects as go
+except ImportError:
+    px = None
+    go = None
 
 def analyze_and_plot(df: pd.DataFrame, time_col: str, val_col: str):
     """

@@ -9,11 +9,8 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, File, HTTPException, UploadFile, status, Form
 import pandas as pd
-import io
-import base64
 from app.services.visualization_service import analyze_and_plot
 from app.services.tts_service import generate_speech
-import asyncio
 from pydantic import BaseModel, Field
 
 from app.core.config import settings
@@ -26,6 +23,11 @@ from rag.document_loader import (
 )
 from rag.embeddings import EmbeddingError, EmbeddingService
 from rag.ingestion import DOCUMENTS_DIR, ingest_csv, ingest_document
+from analysis.sensor_pipeline import (
+    clean_sensor_bytes,
+    SensorDataError,
+    SkippedFileError,
+)
 from rag.csv_processor import CorruptedCSVError, EmptyCSVError
 from rag.retrieval import RetrievedChunk, VectorRetriever
 from rag.vector_store import FAISSVectorStore, VectorStoreError
@@ -66,6 +68,9 @@ class ChunkResponse(BaseModel):
 class ChatResponse(BaseModel):
     answer: str
     sources: list[ChunkResponse] = Field(default_factory=list)
+    fig: str | None = None  # Plotly figure JSON when a chart_data tool result exists
+    # NEW-4 / NEW-5: the same numbers the assistant speaks (Interface C), for the results card.
+    assessment: dict[str, Any] | None = None
 
 
 class UploadResponse(BaseModel):
@@ -76,6 +81,8 @@ class UploadResponse(BaseModel):
     rows: int | None = None
     columns: int | None = None
     column_names: list[str] | None = None
+    # Populated for Excel (.xlsx/.xlsm) uploads — relative path of the clean CSV
+    clean_data_path: str | None = None
 
 
 class RetrieveRequest(BaseModel):
@@ -122,10 +129,12 @@ async def upload(file: Annotated[UploadFile, File(...)]):
         )
 
     suffix = Path(file.filename).suffix.lower()
-    if suffix not in {".pdf", ".docx", ".txt", ".csv"}:
+    _EXCEL_SUFFIXES = {".xlsx", ".xlsm"}
+    _DOCUMENT_SUFFIXES = {".pdf", ".docx", ".txt", ".csv"}
+    if suffix not in (_DOCUMENT_SUFFIXES | _EXCEL_SUFFIXES):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Unsupported file format '{suffix}'. Supported formats are: .pdf, .docx, .txt, .csv",
+            detail=f"Unsupported file format '{suffix}'. Supported formats are: .pdf, .docx, .txt, .csv, .xlsx, .xlsm",
         )
 
     document_id = f"doc-{uuid.uuid4().hex[:8]}"
@@ -136,14 +145,49 @@ async def upload(file: Annotated[UploadFile, File(...)]):
             raise HTTPException(status_code=413, detail="File too large")
             
         DOCUMENTS_DIR.mkdir(parents=True, exist_ok=True)
-        import os
-        safe_filename = os.path.basename(file.filename)
+        safe_filename = Path(file.filename).name
         file_path = DOCUMENTS_DIR / f"{document_id}_{safe_filename}"
         
         temp_vector_store = FAISSVectorStore()
+        clean_csv_name: str | None = None  # set only for Excel uploads
         
-        if suffix == ".csv":
-            import asyncio
+        if suffix in _EXCEL_SUFFIXES:
+            # --- NEW-1: Excel sensor recording path ---
+            # 1. Run the Week 5 cleaner (supports 7-col Damaged and 9-col Undamaged layouts)
+            try:
+                clean_df, _sensor_report = await asyncio.to_thread(
+                    clean_sensor_bytes, content, file.filename
+                )
+            except SkippedFileError as exc:
+                raise HTTPException(status_code=400, detail=f"File skipped by sensor cleaner: {exc}") from None
+            except SensorDataError as exc:
+                raise HTTPException(status_code=400, detail=f"Invalid sensor recording: {exc}") from None
+
+            # 2. Persist the cleaned DataFrame as CSV (what analysis tools load)
+            clean_csv_name = f"{document_id}_{Path(file.filename).stem}.csv"
+            clean_csv_path = DOCUMENTS_DIR / clean_csv_name
+            clean_df.to_csv(clean_csv_path, index=False, date_format="%Y-%m-%d %H:%M:%S.%f")
+
+            # 3. Ingest clean CSV for RAG so the chat endpoint can query it
+            clean_csv_bytes = clean_csv_path.read_bytes()
+            ingest_result = await asyncio.to_thread(
+                ingest_csv,
+                clean_csv_name,
+                clean_csv_bytes,
+                document_id,
+                embedding_service,
+                temp_vector_store,
+            )
+            # Override with clean-data dimensions
+            ingest_result.rows = len(clean_df)
+            ingest_result.columns = len(clean_df.columns)
+            ingest_result.column_names = list(clean_df.columns)
+
+            # 4. Also save the raw Excel bytes for audit trail
+            file_path = DOCUMENTS_DIR / f"{document_id}_{safe_filename}"
+            file_path.write_bytes(content)
+
+        elif suffix == ".csv":
             ingest_result = await asyncio.to_thread(
                 ingest_csv,
                 file.filename,
@@ -153,7 +197,6 @@ async def upload(file: Annotated[UploadFile, File(...)]):
                 temp_vector_store,
             )
         else:
-            import asyncio
             ingest_result = await asyncio.to_thread(
                 ingest_document,
                 file.filename,
@@ -175,6 +218,11 @@ async def upload(file: Annotated[UploadFile, File(...)]):
     except (EmbeddingError, VectorStoreError) as error:
         raise HTTPException(status_code=500, detail=str(error))
 
+    # Keep the raw upload so /chat and the analytical tools can load it as a DataFrame
+    # For Excel uploads, file_path is already written inside the Excel branch above.
+    if suffix not in _EXCEL_SUFFIXES:
+        file_path.write_bytes(content)
+
     _uploaded_documents.clear()
     chunks = [
         ChunkResponse(
@@ -194,6 +242,7 @@ async def upload(file: Annotated[UploadFile, File(...)]):
         rows=ingest_result.rows if hasattr(ingest_result, 'rows') else None,
         columns=ingest_result.columns if hasattr(ingest_result, 'columns') else None,
         column_names=ingest_result.column_names if hasattr(ingest_result, 'column_names') else None,
+        clean_data_path=clean_csv_name if suffix in _EXCEL_SUFFIXES else None,
     )
 
 def _get_all_chunks() -> list[ChunkResponse]:
@@ -345,84 +394,109 @@ async def speak(request: ChatRequest):
 @router.post("/chat", response_model=ChatResponse)
 @router.post("/api/chat", response_model=ChatResponse, include_in_schema=False)
 async def chat(request: ChatRequest):
+    """Main conversational endpoint.
+
+    Flow:
+    1. Resolve active DataFrame (from last uploaded file, if any).
+    2. Run the ToolDispatcher to detect analytical intent and execute the tool.
+    3. Run FAISS + lexical RAG retrieval in parallel.
+    4. Merge tool result + retrieved chunks into the LLM context.
+    5. Generate and return the LLM response.
+
+    RAG and Analytics are complementary: both can contribute context to the
+    same LLM call.  If no analytical intent is found, only RAG context is used.
+    If no RAG results exist, only the analytical result is used.
+    """
     clean_message = request.message.strip()
     if not clean_message:
         raise HTTPException(status_code=400, detail="Message empty")
 
     try:
-        retrieved_chunks = []
-        tool_analytical_result = None
+        # ------------------------------------------------------------------
+        # 1. Resolve active DataFrame from the last uploaded CSV/document
+        # ------------------------------------------------------------------
+        from analysis.tools import data_access
+        from analysis.dispatcher import dispatcher
 
-        # Check for analytical tool routing (summary stats, anomalies, predictions, chart)
-        from analysis.tools import registry, data_access
-        lower_msg = clean_message.lower()
-        
-        # Load active dataset if available
         active_df = None
         if _uploaded_documents:
             doc_id = list(_uploaded_documents.keys())[0]
-            matching_files = list(DOCUMENTS_DIR.glob(f"{doc_id}_*"))
+            # An Excel upload leaves two files: the raw workbook and the cleaned CSV.
+            # Always load the cleaned CSV (Sensor_1..5 + Relative_Time_Sec), never the raw
+            # headerless workbook; glob order alone is not reliable.
+            matching_files = sorted(
+                DOCUMENTS_DIR.glob(f"{doc_id}_*"),
+                key=lambda path: (path.suffix.lower() != ".csv", path.name),
+            )
             if matching_files:
                 try:
-                    active_df = data_access.load_dataset(matching_files[0])
-                except Exception:
-                    pass
+                    active_df = await asyncio.to_thread(
+                        data_access.load_dataset, matching_files[0]
+                    )
+                except Exception as load_err:
+                    logger.debug("Could not load active dataset: %s", load_err)
 
-        # Match analytical intent if keywords match
-        if any(w in lower_msg for w in ["stat", "average", "mean", "min", "max", "summary"]) and "chart" not in lower_msg:
-            metric = "deflection"
-            if active_df is not None:
-                numeric_cols = list(active_df.select_dtypes(include=["number"]).columns)
-                for col in numeric_cols:
-                    if col.lower() in lower_msg:
-                        metric = col
-                        break
-                else:
-                    if numeric_cols:
-                        metric = numeric_cols[0]
-            tool_analytical_result = registry.execute("summary_statistics", {"metric": metric}, df=active_df)
-
-        elif any(w in lower_msg for w in ["anomaly", "anomalies", "outlier", "alert", "spike"]):
-            metric = "vibration"
-            if active_df is not None:
-                numeric_cols = list(active_df.select_dtypes(include=["number"]).columns)
-                for col in numeric_cols:
-                    if col.lower() in lower_msg:
-                        metric = col
-                        break
-                else:
-                    if numeric_cols:
-                        metric = numeric_cols[0]
-            tool_analytical_result = registry.execute("anomaly_detection", {"metric": metric, "threshold": 2.0}, df=active_df)
-
-        elif any(w in lower_msg for w in ["predict", "condition", "status", "forecast"]):
-            tool_analytical_result = registry.execute("model_result", {"sensor_id": "S01", "target_variable": "condition"}, df=active_df)
-
-        elif any(w in lower_msg for w in ["chart", "plot", "graph", "visualize"]):
-            y_col = "deflection"
-            if active_df is not None:
-                numeric_cols = list(active_df.select_dtypes(include=["number"]).columns)
-                if numeric_cols:
-                    y_col = numeric_cols[0]
-            tool_analytical_result = registry.execute("chart_data", {"x_col": "timestamp", "y_col": y_col}, df=active_df)
-
-        # Vector & Lexical RAG Retrieval
+        # ------------------------------------------------------------------
+        # 2. Analytical tool dispatch (ToolDispatcher)
+        # ------------------------------------------------------------------
+        dispatch_results = []
         try:
-            semantic_results = retriever.retrieve(clean_message, top_k=3)
+            dispatch_results = await asyncio.to_thread(
+                dispatcher.detect_and_dispatch_all, clean_message, active_df
+            )
+        except Exception as disp_err:
+            logger.warning("Dispatcher error (non-fatal): %s", disp_err)
+
+        # ------------------------------------------------------------------
+        # 3. Vector + Lexical RAG retrieval
+        # ------------------------------------------------------------------
+        retrieved_chunks = []
+        try:
+            semantic_results = retriever.retrieve(clean_message, top_k=1)
             if semantic_results:
-                retrieved_chunks = [RetrievalResult(chunk=ChunkResponse(text=r.text, source_file=r.source_file, page_number=r.page_number, chunk_id=r.chunk_id), score=r.score) for r in semantic_results]
+                retrieved_chunks = [
+                    RetrievalResult(
+                        chunk=ChunkResponse(
+                            text=r.text,
+                            source_file=r.source_file,
+                            page_number=r.page_number,
+                            chunk_id=r.chunk_id,
+                        ),
+                        score=r.score,
+                    )
+                    for r in semantic_results
+                ]
         except Exception:
             pass
-            
+
         if not retrieved_chunks:
             retrieved_chunks = _lexical_document_results(clean_message, limit=3)
 
+        # ------------------------------------------------------------------
+        # 4. Merge contexts for the LLM prompt
+        # ------------------------------------------------------------------
         context_blocks = []
+
         if retrieved_chunks:
-            context_blocks.append("\n\n".join(f"[Source: {r.chunk.source_file}]\n{r.chunk.text}" for r in retrieved_chunks))
-        
-        if tool_analytical_result and tool_analytical_result.get("status") == "success":
-            context_blocks.append(f"[Analytical Tool Result - {tool_analytical_result['tool']}]\n{tool_analytical_result['data']}")
+            context_blocks.append(
+                "\n\n".join(
+                    f"[Source: {r.chunk.source_file}]\n{r.chunk.text}"
+                    for r in retrieved_chunks
+                )
+            )
+
+        for dispatch_result in dispatch_results:
+            if dispatch_result.status == "success":
+                context_blocks.append(
+                    f"[Analytical Tool: {dispatch_result.tool_name}]\n"
+                    f"{dispatch_result.llm_summary}"
+                )
+            else:
+                # Still surface the error to the LLM so it can explain to the user
+                context_blocks.append(
+                    f"[Analytical Tool Error: {dispatch_result.tool_name}]\n"
+                    f"{dispatch_result.message}"
+                )
 
         if context_blocks:
             context = "\n\n".join(context_blocks)
@@ -430,17 +504,54 @@ async def chat(request: ChatRequest):
             system_content = SYSTEM_PROMPT.format(context=context)
             user_content = USER_PROMPT.format(query=clean_message)
         else:
-            system_content = "You are a helpful assistant for the Talking to Bridges platform. The user has not provided any document context or analytical data. If they ask about a document or dataset, inform them politely that none is uploaded."
+            system_content = (
+                "You are a helpful assistant for the Talking to Bridges platform. "
+                "The user has not uploaded any document or dataset yet. "
+                "If they ask about sensor data or a document, invite them to upload one."
+            )
             user_content = clean_message
 
+        # ------------------------------------------------------------------
+        # 5. LLM generation
+        # ------------------------------------------------------------------
         messages = [{"role": "system", "content": system_content}]
         for msg in request.chat_history[-5:]:
             messages.append({"role": msg.role, "content": msg.content})
         messages.append({"role": "user", "content": user_content})
 
         answer = await llm_service.generate(messages)
-        return ChatResponse(answer=answer, sources=[r.chunk for r in retrieved_chunks])
+        chart_json = None
+        assessment = None
+        for dispatch_result in dispatch_results:
+            if dispatch_result.status != "success" or not dispatch_result.data:
+                continue
+            if dispatch_result.tool_name == "chart_data" and chart_json is None:
+                candidate = dispatch_result.data.get("plot_json")
+                if candidate and candidate != "{}":
+                    chart_json = candidate
+            elif dispatch_result.tool_name == "model_result" and assessment is None:
+                data = dispatch_result.data
+                if data.get("status") == "ok":
+                    assessment = {
+                        key: data.get(key)
+                        for key in (
+                            "model_available", "condition", "condition_confidence",
+                            "severity_mm", "severity_confidence", "severity_label",
+                            "top_parameters", "agreement", "agreement_note", "caveats",
+                        )
+                    }
+                    assessment["baseline_flag"] = (
+                        (data.get("baseline_comparison") or {}).get("overall_flag")
+                    )
+        return ChatResponse(
+            answer=answer,
+            sources=[r.chunk for r in retrieved_chunks],
+            fig=chart_json,
+            assessment=assessment,
+        )
+
     except Exception as e:
+        logger.exception("Chat endpoint error")
         raise HTTPException(status_code=500, detail=str(e))
 
 class ToolExecuteRequest(BaseModel):
@@ -474,7 +585,10 @@ async def execute_analytical_tool(request: ToolExecuteRequest):
     df = None
     if request.document_id:
         # Search for document file in DOCUMENTS_DIR matching document_id
-        matching_files = list(DOCUMENTS_DIR.glob(f"{request.document_id}_*"))
+        matching_files = sorted(
+            DOCUMENTS_DIR.glob(f"{request.document_id}_*"),
+            key=lambda path: (path.suffix.lower() != ".csv", path.name),
+        )  # cleaned CSV before the raw Excel upload
         if matching_files:
             try:
                 df = data_access.load_dataset(matching_files[0])
@@ -493,7 +607,13 @@ async def analyze_csv(
 ):
     try:
         content = await file.read()
-        df = pd.read_csv(io.BytesIO(content), comment="#")
+        suffix = Path(file.filename or "").suffix.lower()
+        if suffix in (".xlsx", ".xlsm"):
+            df, _ = await asyncio.to_thread(
+                clean_sensor_bytes, content, file.filename or "recording.xlsx"
+            )
+        else:
+            df = pd.read_csv(io.BytesIO(content), comment="#")
         
         from analysis.tools import registry
         tool_result = registry.execute("chart_data", {"x_col": time_col, "y_col": val_col}, df=df)
@@ -534,4 +654,3 @@ async def analyze_csv(
     except Exception as e:
         logger.error(f"Analyze CSV error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
-

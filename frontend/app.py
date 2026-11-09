@@ -4,10 +4,17 @@ import sys
 import io
 from gtts import gTTS
 
-# Ensure repository root is in python search path when running from Streamlit
+# Ensure repository root is at the very front of sys.path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
+while str(PROJECT_ROOT) in sys.path:
+    sys.path.remove(str(PROJECT_ROOT))
+sys.path.insert(0, str(PROJECT_ROOT))
+
+# Remove frontend directory from sys.path if present, to prevent frontend/app.py
+# from colliding with the top-level 'app' package.
+_FRONTEND_DIR = str(PROJECT_ROOT / "frontend")
+if _FRONTEND_DIR in sys.path:
+    sys.path.remove(_FRONTEND_DIR)
 
 # NOW import modules from app or rag
 from app.services.visualization_service import analyze_and_plot
@@ -17,6 +24,7 @@ import pandas as pd
 from rag.document_loader import load_document
 from rag.csv_processor import get_csv_summary, EmptyCSVError, CorruptedCSVError
 import streamlit as st
+from ui.results_card import render_results_card
 
 st.set_page_config(page_title="Talking to Bridges", layout="wide")
 
@@ -26,15 +34,22 @@ st.title("Talking to Bridges")
 st.subheader("An LLM-Based Intelligent Interface for Structural Health Monitoring")
 
 
-# --- Clean Sensor Data Dashboard Page ---
-from dashboard import render_dashboard
-
-st.markdown("---")
+# --- Excel Data Audit (Kolla) ---
 try:
+    from frontend.data_audit_ui import render_data_audit
+    st.markdown("---")
+    render_data_audit()
+except Exception as e:
+    st.error(f"Data Audit error: {e}")
+
+# --- Clean Sensor Data Dashboard Page ---
+try:
+    from frontend.dashboard import render_dashboard
+    st.markdown("---")
     render_dashboard(PROJECT_ROOT)
+    st.markdown("---")
 except Exception as e:  # noqa: BLE001
     st.error(f"Dashboard error: {e}")
-st.markdown("---")
 
 # Initialize session state for chat history and document details
 if "messages" not in st.session_state:
@@ -60,7 +75,8 @@ with st.sidebar:
 
     st.header("Document Upload")
     uploaded_file = st.file_uploader(
-        "Upload a PDF, DOCX, TXT, or CSV file", type=["pdf", "docx", "txt", "csv"]
+        "Upload a PDF, DOCX, TXT, CSV, or sensor recording (.xlsx/.xlsm)",
+        type=["pdf", "docx", "txt", "csv", "xlsx", "xlsm"],
     )
     if st.button("Upload Document") and uploaded_file is not None:
         with st.spinner("Processing and indexing document..."):
@@ -79,8 +95,24 @@ with st.sidebar:
                     st.session_state.messages = []
 
                     is_csv = uploaded_file.name.lower().endswith(".csv")
+                    is_excel = uploaded_file.name.lower().endswith((".xlsx", ".xlsm"))
 
-                    if is_csv:
+                    if is_excel:
+                        # Sensor recording (.xlsx/.xlsm) — cleaned server-side
+                        st.session_state.uploaded_doc = {
+                            "filename": uploaded_file.name,
+                            "document_id": data.get("document_id"),
+                            "chunks_created": data.get("chunks_created"),
+                            "file_type": Path(uploaded_file.name).suffix.lstrip("."),
+                            "rows": data.get("rows"),
+                            "columns": data.get("columns"),
+                            "column_names": data.get("column_names", []),
+                            "clean_data_path": data.get("clean_data_path"),
+                            "preview_df": None,
+                            "page_count": None,
+                            "preview_text": None,
+                        }
+                    elif is_csv:
                         # For CSV: get a rich summary using the local csv_processor
                         try:
                             csv_summary = get_csv_summary(file_bytes, uploaded_file.name)
@@ -158,8 +190,23 @@ with st.sidebar:
 
             if doc.get("preview_df") is not None:
                 with st.expander("CSV Data Preview (first 10 rows)", expanded=True):
-                    st.dataframe(doc["preview_df"], use_container_width=True)
-                
+                    st.dataframe(doc["preview_df"], width='stretch')
+
+        elif doc.get("file_type") in ("xlsx", "xlsm"):
+            # Sensor recording — display cleaned-data summary
+            if doc.get("rows") is not None:
+                st.write(f"**Rows (cleaned):** {doc['rows']}")
+            if doc.get("columns") is not None:
+                st.write(f"**Columns:** {doc['columns']}")
+            if doc.get("column_names"):
+                st.write(f"**Column names:** {', '.join(doc['column_names'])}")
+            if doc.get("clean_data_path"):
+                st.write(f"**Clean data stored at:** `{doc['clean_data_path']}`")
+            st.info(
+                "✅ Sensor recording cleaned and indexed. "
+                "You can now ask questions about this recording."
+            )
+
         else:
             # PDF / DOCX / TXT display
             if doc.get("page_count") is not None:
@@ -169,7 +216,7 @@ with st.sidebar:
                     st.markdown(doc["preview_text"])
 
 # Main chat interface
-for msg in st.session_state.messages:
+for msg_idx, msg in enumerate(st.session_state.messages):
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
         if "sources" in msg and msg["sources"]:
@@ -181,8 +228,10 @@ for msg in st.session_state.messages:
                     if src.get("text"):
                         st.caption(src.get("text"))
 
+        if msg.get("assessment"):
+            render_results_card(msg["assessment"], key=f"chat_card_{msg_idx}")
         if "fig" in msg:
-            st.plotly_chart(msg["fig"], use_container_width=True)
+            st.plotly_chart(msg["fig"], width='stretch', key=f"chat_fig_{msg_idx}")
         if "audio" in msg:
             st.audio(msg["audio"], format=msg.get("content_type", "audio/wav"))
 
@@ -283,12 +332,21 @@ if user_query:
                 sources = data.get("sources", [])
                 st.markdown(answer)
 
+                # Results card (NEW-5): same numbers as the answer, from the assessment field
+                assessment = data.get("assessment")
+                if assessment:
+                    render_results_card(assessment, key=f"chat_card_new_{len(st.session_state.messages)}")
+
                 # Render plot if backend generated one
                 fig = None
                 fig_json = data.get("fig")
                 if fig_json:
                     fig = pio.from_json(fig_json)
-                    st.plotly_chart(fig, use_container_width=True)
+                    st.plotly_chart(
+                        fig,
+                        width='stretch',
+                        key=f"chat_fig_new_{len(st.session_state.messages)}",
+                    )
 
                 if sources:
                     with st.expander("Sources & Citations", expanded=False):
@@ -317,6 +375,8 @@ if user_query:
 
                 # Store to history
                 msg_data = {"role": "assistant", "content": answer, "sources": sources}
+                if assessment:
+                    msg_data["assessment"] = assessment
                 if fig:
                     msg_data["fig"] = fig
                 if audio_bytes:

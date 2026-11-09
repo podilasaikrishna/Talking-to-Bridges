@@ -197,97 +197,44 @@
         .user-msg { color: var(--accent-green); margin-bottom: 10px; line-height: 1.4; }
         .ai-msg { color: var(--accent-blue); margin-bottom: 12px; border-bottom: 1px solid #282c37; padding-bottom: 8px; line-height: 1.4; }
         .sys-msg { color: var(--accent-amber); margin-bottom: 8px; font-size: 12px; font-style: italic; }
+
+        /* ---------- Avatar (AVT-2 / AVT-3) ---------- */
+        .avatar {
+            width: 180px;
+            height: 180px;
+            cursor: pointer;
+            outline: none;
+            border-radius: 50%;
+            -webkit-tap-highlight-color: transparent;
+        }
+        .avatar[hidden] { display: none; }
+        .avatar:focus-visible { box-shadow: 0 0 0 3px var(--accent-blue); }
+        .avatar svg { width: 100%; height: 100%; overflow: visible; display: block; }
+        .av-glow { fill: none; stroke-width: 3; opacity: 0.35; transition: stroke 0.25s, opacity 0.25s; }
+        .av-idle .av-glow      { stroke: var(--accent-green); }
+        .av-listening .av-glow { stroke: var(--accent-red); opacity: 0.85; animation: av-ring 1.4s infinite alternate ease-in-out; }
+        .av-thinking .av-glow  { stroke: #0088ff; opacity: 0.8; stroke-dasharray: 40 20; animation: av-spin 1.6s infinite linear; transform-origin: 100px 100px; }
+        .av-speaking .av-glow  { stroke: var(--accent-blue); opacity: 0.9; animation: av-ring 0.7s infinite alternate ease-in-out; }
+        .av-dots circle { fill: #0088ff; opacity: 0; }
+        .av-thinking .av-dots circle { animation: av-dot 1.2s infinite; }
+        .av-thinking .av-dots circle:nth-child(2) { animation-delay: 0.2s; }
+        .av-thinking .av-dots circle:nth-child(3) { animation-delay: 0.4s; }
+        @keyframes av-ring { from { stroke-width: 2; } to { stroke-width: 7; } }
+        @keyframes av-spin { to { transform: rotate(360deg); } }
+        @keyframes av-dot  { 0%, 100% { opacity: 0.15; } 50% { opacity: 1; } }
+        @media (prefers-reduced-motion: reduce) {
+            .av-listening .av-glow, .av-thinking .av-glow, .av-speaking .av-glow, .av-thinking .av-dots circle { animation: none; }
+        }
     </style>
-    <script src="https://cdn.plot.ly/plotly-latest.min.js">
-        async function generateChart() {
-            const fileInput = document.getElementById('file-upload');
-            const file = fileInput.files[0];
-            const xCol = document.getElementById('x-axis-select').value;
-            const yCol = document.getElementById('y-axis-select').value;
-            
-            if (!file || !xCol || !yCol) {
-                alert("Please select a file, X-axis, and Y-axis.");
-                return;
-            }
-
-            statusEl.innerText = "Analyzing data and generating chart...";
-            
-            const formData = new FormData();
-            formData.append("file", file);
-            formData.append("time_col", xCol);
-            formData.append("val_col", yCol);
-
-            try {
-                const res = await fetch(`${BACKEND_URL}/analyze_csv`, { method: "POST", body: formData });
-                const data = await res.json();
-
-                if (res.ok) {
-                    statusEl.innerText = "Chart generated successfully!";
-                    
-                    // Add explanation to chat
-                    const aiMsg = document.createElement('div');
-                    aiMsg.className = 'ai-msg';
-                    aiMsg.innerHTML = '<strong>System:</strong><br/>' + data.explanation;
-                    chatLog.appendChild(aiMsg);
-                    
-                    // Create Plotly div
-                    const plotDiv = document.createElement('div');
-                    plotDiv.style.width = "100%";
-                    plotDiv.style.height = "350px";
-                    plotDiv.style.marginTop = "10px";
-                    plotDiv.style.marginBottom = "20px";
-                    plotDiv.id = 'plot-' + Date.now();
-                    chatLog.appendChild(plotDiv);
-                    
-                    chatLog.scrollTop = chatLog.scrollHeight;
-                    
-                    // Render Plotly chart
-                    const fig = JSON.parse(data.fig_json);
-                    Plotly.newPlot(plotDiv.id, fig.data, fig.layout, {responsive: true});
-                    
-                    chatLog.scrollTop = chatLog.scrollHeight;
-
-                    // Play audio
-                    if (data.audio_base64) {
-                        const audioBlob = b64toBlob(data.audio_base64, data.content_type);
-                        const audioUrl = URL.createObjectURL(audioBlob);
-                        if (currentAudio) currentAudio.pause();
-                        currentAudio = new Audio(audioUrl);
-                        currentAudio.play();
-                    }
-                } else {
-                    statusEl.innerText = "Error: " + (data.detail || "Analysis failed");
-                }
-            } catch (err) {
-                console.error(err);
-                statusEl.innerText = "Failed to generate chart.";
-            }
-        }
-        
-        function b64toBlob(b64Data, contentType='', sliceSize=512) {
-            const byteCharacters = atob(b64Data);
-            const byteArrays = [];
-            for (let offset = 0; offset < byteCharacters.length; offset += sliceSize) {
-                const slice = byteCharacters.slice(offset, offset + sliceSize);
-                const byteNumbers = new Array(slice.length);
-                for (let i = 0; i < slice.length; i++) {
-                    byteNumbers[i] = slice.charCodeAt(i);
-                }
-                const byteArray = new Uint8Array(byteNumbers);
-                byteArrays.push(byteArray);
-            }
-            return new Blob(byteArrays, {type: contentType});
-        }
-
-    </script>
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
 </head>
 <body>
 
     <div class="upload-container">
-        <input type="file" id="file-upload" accept=".pdf,.txt,.docx,.csv" style="display:none;" onchange="uploadDocument()">
+        <input type="file" id="file-upload" accept=".pdf,.txt,.docx,.csv,.xlsx,.xlsm" style="display:none;" onchange="uploadDocument()">
         <div class="upload-btn-group">
             <button onclick="document.getElementById('file-upload').click()" class="upload-btn">
-                📂 Upload Context (CSV / Docs)
+                📂 Upload Context (Excel / CSV / Docs)
             </button>
         </div>
         <div id="upload-status"></div>
@@ -296,7 +243,7 @@
             <div id="card-details"></div>
             
             <div id="card-csv-details" class="csv-summary" style="display:none;">
-                <span class="csv-badge">CSV DATA</span>
+                <span class="csv-badge" id="data-badge">CSV DATA</span>
                 <span id="csv-shape-info"></span>
                 <div class="column-tags" id="csv-columns-list"></div>
                 
@@ -312,17 +259,53 @@
                 </div>
             </div>
         </div>
-        </div>
     </div>
 
     <h1>VOICE AGENT</h1>
     <p class="subtitle">TALKING TO BRIDGES</p>
 
+
     <div class="orb-container">
+        <div id="avatar" class="avatar av-idle" role="button" tabindex="0"
+             aria-label="Assistant avatar, idle. Press to start or pause the voice agent.">
+            <svg viewBox="0 0 200 200" aria-hidden="true">
+                <defs>
+                    <linearGradient id="av-skin" x1="0" y1="0" x2="1" y2="1">
+                        <stop offset="0" stop-color="#00ff88"/>
+                        <stop offset="1" stop-color="#00b4d8"/>
+                    </linearGradient>
+                </defs>
+                <circle class="av-glow" cx="100" cy="100" r="92"/>
+                <g id="av-head">
+                    <circle cx="100" cy="100" r="80" fill="url(#av-skin)"/>
+                    <g id="av-brows" stroke="#0e1117" stroke-width="5" stroke-linecap="round" fill="none">
+                        <path id="av-brow-l" d="M58 66 Q72 60 86 66"/>
+                        <path id="av-brow-r" d="M114 66 Q128 60 142 66"/>
+                    </g>
+                    <g id="av-eyes">
+                        <g id="av-eye-l" transform="translate(72 88)">
+                            <ellipse rx="11" ry="13" fill="#fff"/>
+                            <circle class="av-pupil" r="6" fill="#0e1117"/>
+                        </g>
+                        <g id="av-eye-r" transform="translate(128 88)">
+                            <ellipse rx="11" ry="13" fill="#fff"/>
+                            <circle class="av-pupil" r="6" fill="#0e1117"/>
+                        </g>
+                    </g>
+                    <path id="av-mouth" d="M72 136 Q100 146 128 136 Q100 146 72 136 Z"
+                          fill="#0e1117" stroke="#0e1117" stroke-width="4" stroke-linejoin="round" stroke-linecap="round"/>
+                </g>
+                <g class="av-dots">
+                    <circle cx="150" cy="30" r="5"/>
+                    <circle cx="166" cy="30" r="5"/>
+                    <circle cx="182" cy="30" r="5"/>
+                </g>
+            </svg>
+        </div>
         <div id="orb" class="orb" onclick="startSystem()"></div>
     </div>
 
-    <div id="status">Click the orb to start</div>
+    <div id="status">Click the avatar (or orb) to start</div>
     
     <div id="chat-log"></div>
 
@@ -341,6 +324,8 @@
         let isRecording = false;
         let currentAudio = null;
         let localStream = null;
+        let activeDocId = null;
+        let activeDocContext = "";
 
         async function uploadDocument() {
             const fileInput = document.getElementById('file-upload');
@@ -356,7 +341,15 @@
             if (!file) return;
 
             const isCsv = file.name.toLowerCase().endsWith('.csv');
-            statusDiv.innerText = isCsv ? "Parsing CSV & generating vector embeddings..." : "Uploading to vector database...";
+            const isExcel = file.name.toLowerCase().endsWith('.xlsx') || file.name.toLowerCase().endsWith('.xlsm');
+
+            if (isExcel) {
+                statusDiv.innerText = "Cleaning sensor recording (.xlsx/.xlsm) & indexing...";
+            } else if (isCsv) {
+                statusDiv.innerText = "Parsing CSV & generating vector embeddings...";
+            } else {
+                statusDiv.innerText = "Uploading to vector database...";
+            }
             statusDiv.style.color = "#aaa";
 
             const formData = new FormData();
@@ -367,20 +360,53 @@
                 const data = await res.json();
 
                 if (res.ok) {
-                    statusDiv.innerText = isCsv ? "CSV processed and indexed into FAISS!" : "Document processed & ready!";
+                    if (isExcel) {
+                        statusDiv.innerText = "Sensor recording cleaned and indexed into FAISS!";
+                    } else if (isCsv) {
+                        statusDiv.innerText = "CSV processed and indexed into FAISS!";
+                    } else {
+                        statusDiv.innerText = "Document processed & ready!";
+                    }
                     statusDiv.style.color = "#00ff88";
 
                     uploadCard.style.display = "block";
                     cardFilename.innerText = file.name;
-                    cardDetails.innerText = `Chunks Created: ${data.chunks_created} (Doc ID: ${data.document_id})`;
+                    
+                    if (data.clean_data_path) {
+                        cardDetails.innerHTML = `Chunks: <strong>${data.chunks_created}</strong> (Doc ID: <code>${data.document_id}</code>)<br/><span style="color:#00ff88; font-size:11px;">Clean CSV: ${data.clean_data_path}</span>`;
+                    } else {
+                        cardDetails.innerText = `Chunks Created: ${data.chunks_created} (Doc ID: ${data.document_id})`;
+                    }
 
-                    if (data.file_type === "csv" || isCsv) {
+                    // Save active document context for conversational RAG
+                    activeDocId = data.document_id;
+                    if (isExcel || data.file_type === "xlsx" || data.file_type === "xlsm") {
+                        const colsStr = (data.column_names || []).join(", ");
+                        activeDocContext = `\n[Active Sensor Recording: ${file.name}, Rows: ${data.rows}, Columns: ${colsStr}]`;
+                    } else if (isCsv || data.file_type === "csv") {
+                        const colsStr = (data.column_names || []).join(", ");
+                        activeDocContext = `\n[Active CSV Document: ${file.name}, Rows: ${data.rows}, Columns: ${colsStr}]`;
+                    } else {
+                        activeDocContext = `\n[Active Document: ${file.name}]`;
+                    }
+
+                    const isDataFile = data.file_type === "csv" || data.file_type === "xlsx" || data.file_type === "xlsm" || isCsv || isExcel;
+                    if (isDataFile) {
                         cardCsvDetails.style.display = "block";
-                        const rows = data.rows !== undefined ? data.rows : "N/A";
-                        const cols = data.columns !== undefined ? data.columns : "N/A";
+                        const badge = document.getElementById('data-badge');
+                        if (badge) {
+                            if (isExcel || data.file_type === "xlsx" || data.file_type === "xlsm") {
+                                badge.innerText = "SENSOR RECORDING (CLEANED)";
+                                badge.style.background = "#00b4d8";
+                            } else {
+                                badge.innerText = "CSV DATA";
+                                badge.style.background = "#ffaa00";
+                            }
+                        }
+                        const rows = data.rows !== undefined && data.rows !== null ? data.rows : "N/A";
+                        const cols = data.columns !== undefined && data.columns !== null ? data.columns : "N/A";
                         csvShapeInfo.innerText = `${rows} rows × ${cols} columns`;
 
-                        
                         csvColsList.innerHTML = "";
                         const xSelect = document.getElementById('x-axis-select');
                         const ySelect = document.getElementById('y-axis-select');
@@ -404,15 +430,14 @@
                                 optY.innerText = col;
                                 ySelect.appendChild(optY);
                             });
-                        }
 
-                        if (false) {
-                            data.column_names.forEach(col => {
-                                const tag = document.createElement("span");
-                                tag.className = "column-tag";
-                                tag.innerText = col;
-                                csvColsList.appendChild(tag);
-                            });
+                            // Smart defaults for sensor recordings: X -> Relative_Time_Sec, Y -> Sensor_1
+                            if (data.column_names.includes("Relative_Time_Sec")) {
+                                xSelect.value = "Relative_Time_Sec";
+                            }
+                            if (data.column_names.includes("Sensor_1")) {
+                                ySelect.value = "Sensor_1";
+                            }
                         }
                     } else {
                         cardCsvDetails.style.display = "none";
@@ -445,7 +470,7 @@
             }
             chatLog.innerHTML += `<div class="ai-msg" style="color: #ffaa00"><b>SYSTEM:</b> ${message}</div>`;
             chatLog.scrollTop = chatLog.scrollHeight;
-            statusEl.innerText = "System Stopped. Click orb to restart.";
+            statusEl.innerText = "System Stopped. Click the avatar (or orb) to restart.";
             orb.className = "orb";
             orb.style.background = "";
             orb.style.boxShadow = "none";
@@ -553,7 +578,10 @@
                 statusEl.innerText = "Thinking...";
                 const chatRes = await fetch(`${BACKEND_URL}/api/chat`, {
                     method: "POST", headers: {"Content-Type": "application/json"},
-                    body: JSON.stringify({message: text})
+                    body: JSON.stringify({
+                        message: text + (activeDocContext || ""),
+                        document_id: activeDocId || ""
+                    })
                 });
                 const chatData = await chatRes.json();
                 const answer = chatData.answer || (chatData.error?.message ? "Error: " + chatData.error.message : "No response generated.");
@@ -561,10 +589,26 @@
                 if (!isSystemActive) return;
                 
                 chatLog.innerHTML += `<div class="ai-msg"><b>AI:</b> ${answer}</div>`;
+
+                if (chatData.fig) {
+                    const plotDiv = document.createElement('div');
+                    plotDiv.style.width = "100%";
+                    plotDiv.style.height = "350px";
+                    plotDiv.style.marginTop = "10px";
+                    plotDiv.style.marginBottom = "20px";
+                    plotDiv.id = 'plot-' + Date.now();
+                    chatLog.appendChild(plotDiv);
+                    try {
+                        const fig = typeof chatData.fig === 'string' ? JSON.parse(chatData.fig) : chatData.fig;
+                        Plotly.newPlot(plotDiv.id, fig.data, fig.layout, {responsive: true});
+                    } catch (e) {
+                        console.warn("Could not render chart", e);
+                    }
+                }
                 chatLog.scrollTop = chatLog.scrollHeight;
                 
                 // 3. TTS Speak
-                statusEl.innerText = "Speaking... (Click orb to pause system)";
+                statusEl.innerText = "Speaking... (Click the avatar (or orb) to pause system)";
                 const ttsRes = await fetch(`${BACKEND_URL}/speak`, {
                     method: "POST", headers: {"Content-Type": "application/json"},
                     body: JSON.stringify({message: answer})
@@ -575,6 +619,7 @@
                 
                 if (ttsData.audio_base64) {
                     currentAudio = new Audio("data:" + ttsData.content_type + ";base64," + ttsData.audio_base64);
+                    if (window.avatarSpeak) avatarSpeak(currentAudio);
                     currentAudio.play();
                     
                     currentAudio.onended = () => { 
@@ -653,6 +698,7 @@
                         const audioUrl = URL.createObjectURL(audioBlob);
                         if (currentAudio) currentAudio.pause();
                         currentAudio = new Audio(audioUrl);
+                        if (window.avatarSpeak) avatarSpeak(currentAudio);
                         currentAudio.play();
                     }
                 } else {
@@ -679,6 +725,192 @@
             return new Blob(byteArrays, {type: contentType});
         }
 
+    </script>
+    <script>
+    /* ------------------------------------------------------------------
+       Avatar component (AVT-2) and its connection to the voice page (AVT-3)
+
+       Inputs
+         - the page state: the orb's CSS class ("listening" / "thinking" / else idle),
+           watched with a MutationObserver, so the existing voice code is not changed
+         - avatarSpeak(audioElement): called just before an answer is played; the mouth
+           follows the loudness of that audio (Web Audio analyser)
+       States: idle, listening, thinking, speaking
+       Fallback: if the audio analyser cannot be used, the mouth moves with a simple
+       made-up rhythm while speaking. The avatar is always shown (the old orb stays
+       hidden in the page only because it drives the states).
+       ------------------------------------------------------------------ */
+    (function () {
+        const root   = document.getElementById('avatar');
+        const orbEl  = document.getElementById('orb');
+        const mouth  = document.getElementById('av-mouth');
+        const head   = document.getElementById('av-head');
+        const eyeL   = document.getElementById('av-eye-l');
+        const eyeR   = document.getElementById('av-eye-r');
+        const browL  = document.getElementById('av-brow-l');
+        const browR  = document.getElementById('av-brow-r');
+        const pupils = root.querySelectorAll('.av-pupil');
+        const reduceMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+        let baseState = 'idle';      // from the page (orb class)
+        let speaking = false;        // true while an answer is playing
+        let state = '';
+        const enabled = true;
+        let mouthOpen = 0;           // 0 closed .. 1 wide open (smoothed)
+        let mouthRound = 0;          // 0 wide "ee" .. 1 round "oo"
+        let nextBlink = performance.now() + 2500;
+        let blinkUntil = 0;
+
+        // ---- audio analysis -------------------------------------------------
+        let ctx = null;
+        let analyser = null;
+        let timeData = null;
+        let freqData = null;
+        let analysing = false;       // true when the analyser is connected to the playing audio
+
+        function connectAudio(audio) {
+            analysing = false;
+            try {
+                const AC = window.AudioContext || window.webkitAudioContext;
+                if (!AC) return;
+                if (!ctx) ctx = new AC();
+                if (ctx.state === 'suspended') ctx.resume();
+                const src = ctx.createMediaElementSource(audio);
+                analyser = ctx.createAnalyser();
+                analyser.fftSize = 512;
+                analyser.smoothingTimeConstant = 0.4;
+                src.connect(analyser);
+                analyser.connect(ctx.destination);   // keep the sound audible
+                timeData = new Uint8Array(analyser.fftSize);
+                freqData = new Uint8Array(analyser.frequencyBinCount);
+                analysing = true;
+            } catch (e) {
+                console.warn('Avatar: audio analyser not available, using the simple mouth movement.', e);
+                analysing = false;
+            }
+        }
+
+        window.avatarSpeak = function (audio) {
+            if (!audio) return;
+            connectAudio(audio);
+            const on  = () => { speaking = true;  refresh(); };
+            const off = () => { speaking = false; refresh(); };
+            audio.addEventListener('playing', on);
+            ['ended', 'pause', 'error', 'emptied'].forEach(ev => audio.addEventListener(ev, off));
+        };
+
+        // ---- state ----------------------------------------------------------
+        const LABELS = {
+            idle: 'idle', listening: 'listening', thinking: 'thinking', speaking: 'speaking'
+        };
+
+        function readBaseState() {
+            const c = orbEl.className || '';
+            if (c.indexOf('thinking') !== -1) return 'thinking';
+            if (c.indexOf('listening') !== -1) return 'listening';
+            return 'idle';
+        }
+
+        function refresh() {
+            baseState = readBaseState();
+            const next = speaking ? 'speaking' : baseState;
+            if (next === state) return;
+            state = next;
+            root.classList.remove('av-idle', 'av-listening', 'av-thinking', 'av-speaking');
+            root.classList.add('av-' + state);
+            root.setAttribute('aria-label',
+                'Assistant avatar, ' + LABELS[state] + '. Press to start or pause the voice agent.');
+        }
+
+        new MutationObserver(refresh).observe(orbEl, { attributes: true, attributeFilter: ['class'] });
+
+        // ---- drawing --------------------------------------------------------
+        function loudness() {
+            if (!analysing || !analyser) return null;
+            analyser.getByteTimeDomainData(timeData);
+            let sum = 0;
+            for (let i = 0; i < timeData.length; i++) {
+                const v = (timeData[i] - 128) / 128;
+                sum += v * v;
+            }
+            const rms = Math.sqrt(sum / timeData.length);
+            analyser.getByteFrequencyData(freqData);
+            const hz = ctx.sampleRate / analyser.fftSize;      // width of one bin
+            const split = Math.max(1, Math.round(1500 / hz));
+            let low = 0, high = 0;
+            for (let i = 1; i < freqData.length; i++) {
+                if (i < split) low += freqData[i]; else high += freqData[i];
+            }
+            return { rms: rms, highShare: high / (low + high + 1) };
+        }
+
+        function mouthPath(open, round) {
+            // corners stay at y=136; width shrinks a little for round sounds
+            const w = 28 - 9 * open * round;
+            const lowerY = 146 + 36 * open;           // lower lip control point
+            const upperY = 146 - 6 * open;            // upper lip control point
+            const x1 = 100 - w, x2 = 100 + w;
+            return 'M' + x1 + ' 136 Q100 ' + upperY + ' ' + x2 + ' 136 Q100 ' + lowerY + ' ' + x1 + ' 136 Z';
+        }
+
+        function frame(now) {
+            requestAnimationFrame(frame);
+            if (!enabled || document.hidden) return;
+            const t = now / 1000;
+
+            // mouth
+            let target = 0;
+            if (state === 'speaking') {
+                const m = loudness();
+                if (m) {
+                    target = Math.min(1, Math.max(0, (m.rms - 0.015) * 9));
+                    mouthRound += ((1 - Math.min(1, m.highShare * 2.5)) - mouthRound) * 0.3;
+                } else {                                     // simple fallback rhythm
+                    target = Math.max(0, Math.sin(t * 13) * Math.sin(t * 5.1)) * 0.8;
+                    mouthRound = 0.5 + 0.5 * Math.sin(t * 3);
+                }
+            }
+            mouthOpen += (target - mouthOpen) * (target > mouthOpen ? 0.6 : 0.25);
+            mouth.setAttribute('d', mouthPath(mouthOpen, mouthRound));
+
+            // blink
+            let eyeScale = 1;
+            if (now > nextBlink) { blinkUntil = now + 140; nextBlink = now + 2500 + Math.random() * 2500; }
+            if (now < blinkUntil) eyeScale = 0.1;
+            else if (state === 'listening') eyeScale = 1.1;
+            eyeL.setAttribute('transform', 'translate(72 88) scale(1 ' + eyeScale + ')');
+            eyeR.setAttribute('transform', 'translate(128 88) scale(1 ' + eyeScale + ')');
+
+            // gaze and brows
+            let gx = 0, gy = 0, brow = 0;
+            if (state === 'thinking') { gx = -4; gy = -5; brow = -4; }
+            else if (state === 'listening') { brow = -3; }
+            else if (state === 'speaking') { brow = -1.5 * mouthOpen; }
+            pupils.forEach(p => p.setAttribute('transform', 'translate(' + gx + ' ' + gy + ')'));
+            browL.setAttribute('transform', 'translate(0 ' + brow + ')');
+            browR.setAttribute('transform', 'translate(0 ' + brow + ')');
+
+            // gentle breathing
+            if (!reduceMotion) {
+                const s = 1 + 0.012 * Math.sin(t * 1.8);
+                head.setAttribute('transform', 'translate(100 100) scale(' + s + ') translate(-100 -100)');
+            }
+        }
+
+        // ---- always on, and clicks ------------------------------------------
+        root.hidden = false;
+        orbEl.style.display = 'none';
+        root.addEventListener('click', () => startSystem());
+        root.addEventListener('keydown', e => {
+            if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); startSystem(); }
+        });
+
+        refresh();
+        requestAnimationFrame(frame);
+
+        // small hook so the page (and tests) can read the current state
+        window.avatarState = function () { return { state: state, enabled: enabled, mouthOpen: mouthOpen, analysing: analysing }; };
+    })();
     </script>
 </body>
 </html>

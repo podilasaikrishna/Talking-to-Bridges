@@ -1,0 +1,663 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Talking to Bridges - Voice Mode</title>
+    <style>
+        :root {
+            --bg-main: #0e1117;
+            --bg-card: #1a1c23;
+            --border-color: #333340;
+            --accent-green: #00ff88;
+            --accent-blue: #00b4d8;
+            --accent-amber: #ffaa00;
+            --accent-red: #ff0055;
+            --text-main: #fafafa;
+            --text-muted: #888;
+        }
+
+        body {
+            background-color: var(--bg-main);
+            color: var(--text-main);
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            margin: 0;
+            padding: 20px;
+            box-sizing: border-box;
+        }
+
+        h1 {
+            font-weight: 300;
+            letter-spacing: 2px;
+            margin-bottom: 5px;
+            margin-top: 0;
+        }
+
+        p.subtitle {
+            color: var(--text-muted);
+            margin-bottom: 25px;
+            letter-spacing: 1px;
+            font-size: 14px;
+        }
+        
+        .orb-container {
+            width: 180px;
+            height: 180px;
+            position: relative;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-bottom: 20px;
+        }
+        
+        .orb {
+            width: 100px;
+            height: 100px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, var(--accent-green) 0%, var(--accent-blue) 100%);
+            box-shadow: 0 0 30px rgba(0, 255, 136, 0.4);
+            transition: all 0.2s ease-in-out;
+            cursor: pointer;
+        }
+        
+        .orb.listening {
+            animation: pulse 1.5s infinite alternate;
+            background: linear-gradient(135deg, var(--accent-red) 0%, var(--accent-amber) 100%);
+            box-shadow: 0 0 50px rgba(255, 0, 85, 0.6);
+        }
+        
+        .orb.thinking {
+            animation: spin 1s infinite linear;
+            background: conic-gradient(from 0deg, transparent 0%, #0088ff 100%);
+            border-radius: 50%;
+            box-shadow: 0 0 40px rgba(0, 136, 255, 0.5);
+        }
+        
+        @keyframes pulse {
+            0% { transform: scale(1); box-shadow: 0 0 30px rgba(255, 0, 85, 0.4); }
+            100% { transform: scale(1.2); box-shadow: 0 0 60px rgba(255, 0, 85, 0.8); }
+        }
+        
+        @keyframes spin {
+            100% { transform: rotate(360deg); }
+        }
+        
+        .upload-container {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            text-align: right;
+            max-width: 320px;
+        }
+        
+        .upload-btn-group {
+            display: flex;
+            gap: 8px;
+            justify-content: flex-end;
+        }
+
+        .upload-btn {
+            background: var(--bg-card);
+            color: #ccc;
+            border: 1px solid var(--border-color);
+            padding: 9px 14px;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: 0.2s;
+            font-size: 13px;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+        }
+        
+        .upload-btn:hover {
+            background: #282c37;
+            color: #fff;
+            border-color: var(--accent-blue);
+        }
+
+        .upload-card {
+            display: none;
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 12px;
+            margin-top: 10px;
+            text-align: left;
+            font-size: 12px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.3);
+        }
+        
+        #upload-status {
+            font-size: 12px;
+            color: #aaa;
+            margin-top: 6px;
+        }
+
+        .csv-summary {
+            margin-top: 8px;
+            padding-top: 8px;
+            border-top: 1px solid var(--border-color);
+        }
+
+        .csv-badge {
+            display: inline-block;
+            background: rgba(0, 255, 136, 0.15);
+            color: var(--accent-green);
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-weight: bold;
+            font-size: 10px;
+            margin-right: 4px;
+        }
+
+        .column-tags {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 4px;
+            margin-top: 6px;
+            max-height: 60px;
+            overflow-y: auto;
+        }
+
+        .column-tag {
+            background: #252a36;
+            color: #8ed0ff;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-size: 10px;
+        }
+        
+        #status {
+            font-size: 1.1rem;
+            margin-bottom: 15px;
+            height: 25px;
+            font-weight: bold;
+            color: #dedede;
+        }
+
+        #chat-log {
+            width: 90%;
+            max-width: 650px;
+            height: 450px;
+            overflow-y: auto;
+            background: var(--bg-card);
+            border-radius: 10px;
+            padding: 18px;
+            box-sizing: border-box;
+            font-size: 14px;
+            border: 1px solid var(--border-color);
+        }
+
+        .user-msg { color: var(--accent-green); margin-bottom: 10px; line-height: 1.4; }
+        .ai-msg { color: var(--accent-blue); margin-bottom: 12px; border-bottom: 1px solid #282c37; padding-bottom: 8px; line-height: 1.4; }
+        .sys-msg { color: var(--accent-amber); margin-bottom: 8px; font-size: 12px; font-style: italic; }
+    </style>
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+</head>
+<body>
+
+    <div class="upload-container">
+        <input type="file" id="file-upload" accept=".pdf,.txt,.docx,.csv,.xlsx,.xlsm" style="display:none;" onchange="uploadDocument()">
+        <div class="upload-btn-group">
+            <button onclick="document.getElementById('file-upload').click()" class="upload-btn">
+                📂 Upload Context (Excel / CSV / Docs)
+            </button>
+        </div>
+        <div id="upload-status"></div>
+        <div id="upload-card" class="upload-card">
+            <div id="card-filename" style="font-weight:bold; margin-bottom:4px;"></div>
+            <div id="card-details"></div>
+            
+            <div id="card-csv-details" class="csv-summary" style="display:none;">
+                <span class="csv-badge" id="data-badge">CSV DATA</span>
+                <span id="csv-shape-info"></span>
+                <div class="column-tags" id="csv-columns-list"></div>
+                
+                <div id="chart-controls" style="margin-top: 10px; padding-top: 10px; border-top: 1px solid #444;">
+                    <div style="margin-bottom: 5px; color: #8ed0ff; font-weight: bold;">Generate Insight Chart:</div>
+                    <select id="x-axis-select" style="background: #252a36; color: white; border: 1px solid #444; border-radius: 4px; padding: 4px; margin-right: 5px; width: 120px;">
+                        <option value="">X-Axis...</option>
+                    </select>
+                    <select id="y-axis-select" style="background: #252a36; color: white; border: 1px solid #444; border-radius: 4px; padding: 4px; margin-right: 5px; width: 120px;">
+                        <option value="">Y-Axis...</option>
+                    </select>
+                    <button onclick="generateChart()" class="upload-btn" style="margin-top: 5px; background: #0055ff; border-color: #0044cc;">📊 Generate</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <h1>VOICE AGENT</h1>
+    <p class="subtitle">TALKING TO BRIDGES</p>
+
+    <div class="orb-container">
+        <div id="orb" class="orb" onclick="startSystem()"></div>
+    </div>
+
+    <div id="status">Click the orb to start</div>
+    
+    <div id="chat-log"></div>
+
+    <script>
+        const BACKEND_URL = "http://127.0.0.1:8001";
+
+        const orb = document.getElementById('orb');
+        const statusEl = document.getElementById('status');
+        const chatLog = document.getElementById('chat-log');
+        
+        let mediaRecorder;
+        let audioChunks = [];
+        let isSystemActive = false;
+        let isSpeaking = false;
+        let silenceTimer;
+        let isRecording = false;
+        let currentAudio = null;
+        let localStream = null;
+        let activeDocId = null;
+        let activeDocContext = "";
+
+        async function uploadDocument() {
+            const fileInput = document.getElementById('file-upload');
+            const statusDiv = document.getElementById('upload-status');
+            const uploadCard = document.getElementById('upload-card');
+            const cardFilename = document.getElementById('card-filename');
+            const cardDetails = document.getElementById('card-details');
+            const cardCsvDetails = document.getElementById('card-csv-details');
+            const csvShapeInfo = document.getElementById('csv-shape-info');
+            const csvColsList = document.getElementById('csv-columns-list');
+
+            const file = fileInput.files[0];
+            if (!file) return;
+
+            const isCsv = file.name.toLowerCase().endsWith('.csv');
+            const isExcel = file.name.toLowerCase().endsWith('.xlsx') || file.name.toLowerCase().endsWith('.xlsm');
+
+            if (isExcel) {
+                statusDiv.innerText = "Cleaning sensor recording (.xlsx/.xlsm) & indexing...";
+            } else if (isCsv) {
+                statusDiv.innerText = "Parsing CSV & generating vector embeddings...";
+            } else {
+                statusDiv.innerText = "Uploading to vector database...";
+            }
+            statusDiv.style.color = "#aaa";
+
+            const formData = new FormData();
+            formData.append("file", file);
+
+            try {
+                const res = await fetch(`${BACKEND_URL}/upload`, { method: "POST", body: formData });
+                const data = await res.json();
+
+                if (res.ok) {
+                    if (isExcel) {
+                        statusDiv.innerText = "Sensor recording cleaned and indexed into FAISS!";
+                    } else if (isCsv) {
+                        statusDiv.innerText = "CSV processed and indexed into FAISS!";
+                    } else {
+                        statusDiv.innerText = "Document processed & ready!";
+                    }
+                    statusDiv.style.color = "#00ff88";
+
+                    uploadCard.style.display = "block";
+                    cardFilename.innerText = file.name;
+                    
+                    if (data.clean_data_path) {
+                        cardDetails.innerHTML = `Chunks: <strong>${data.chunks_created}</strong> (Doc ID: <code>${data.document_id}</code>)<br/><span style="color:#00ff88; font-size:11px;">Clean CSV: ${data.clean_data_path}</span>`;
+                    } else {
+                        cardDetails.innerText = `Chunks Created: ${data.chunks_created} (Doc ID: ${data.document_id})`;
+                    }
+
+                    // Save active document context for conversational RAG
+                    activeDocId = data.document_id;
+                    if (isExcel || data.file_type === "xlsx" || data.file_type === "xlsm") {
+                        const colsStr = (data.column_names || []).join(", ");
+                        activeDocContext = `\n[Active Sensor Recording: ${file.name}, Rows: ${data.rows}, Columns: ${colsStr}]`;
+                    } else if (isCsv || data.file_type === "csv") {
+                        const colsStr = (data.column_names || []).join(", ");
+                        activeDocContext = `\n[Active CSV Document: ${file.name}, Rows: ${data.rows}, Columns: ${colsStr}]`;
+                    } else {
+                        activeDocContext = `\n[Active Document: ${file.name}]`;
+                    }
+
+                    const isDataFile = data.file_type === "csv" || data.file_type === "xlsx" || data.file_type === "xlsm" || isCsv || isExcel;
+                    if (isDataFile) {
+                        cardCsvDetails.style.display = "block";
+                        const badge = document.getElementById('data-badge');
+                        if (badge) {
+                            if (isExcel || data.file_type === "xlsx" || data.file_type === "xlsm") {
+                                badge.innerText = "SENSOR RECORDING (CLEANED)";
+                                badge.style.background = "#00b4d8";
+                            } else {
+                                badge.innerText = "CSV DATA";
+                                badge.style.background = "#ffaa00";
+                            }
+                        }
+                        const rows = data.rows !== undefined && data.rows !== null ? data.rows : "N/A";
+                        const cols = data.columns !== undefined && data.columns !== null ? data.columns : "N/A";
+                        csvShapeInfo.innerText = `${rows} rows × ${cols} columns`;
+
+                        csvColsList.innerHTML = "";
+                        const xSelect = document.getElementById('x-axis-select');
+                        const ySelect = document.getElementById('y-axis-select');
+                        xSelect.innerHTML = '<option value="">X-Axis...</option>';
+                        ySelect.innerHTML = '<option value="">Y-Axis...</option>';
+
+                        if (data.column_names && Array.isArray(data.column_names)) {
+                            data.column_names.forEach(col => {
+                                const tag = document.createElement("span");
+                                tag.className = "column-tag";
+                                tag.innerText = col;
+                                csvColsList.appendChild(tag);
+                                
+                                const optX = document.createElement("option");
+                                optX.value = col;
+                                optX.innerText = col;
+                                xSelect.appendChild(optX);
+                                
+                                const optY = document.createElement("option");
+                                optY.value = col;
+                                optY.innerText = col;
+                                ySelect.appendChild(optY);
+                            });
+
+                            // Smart defaults for sensor recordings: X -> Relative_Time_Sec, Y -> Sensor_1
+                            if (data.column_names.includes("Relative_Time_Sec")) {
+                                xSelect.value = "Relative_Time_Sec";
+                            }
+                            if (data.column_names.includes("Sensor_1")) {
+                                ySelect.value = "Sensor_1";
+                            }
+                        }
+                    } else {
+                        cardCsvDetails.style.display = "none";
+                    }
+
+                    chatLog.innerHTML += `<div class="sys-msg">Indexed <b>${file.name}</b> (${data.chunks_created} chunks). You can now ask questions about it.</div>`;
+                    chatLog.scrollTop = chatLog.scrollHeight;
+                } else {
+                    statusDiv.innerText = "Error: " + (data.error?.message || data.detail || "Upload failed");
+                    statusDiv.style.color = "#ff0055";
+                }
+            } catch (err) {
+                statusDiv.innerText = `Failed to connect to backend (${BACKEND_URL}).`;
+                statusDiv.style.color = "#ff0055";
+            }
+        }
+        
+        function stopSystem(message) {
+            if (currentAudio) {
+                currentAudio.pause();
+                currentAudio.currentTime = 0;
+                currentAudio = null;
+            }
+            if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+                mediaRecorder.stop();
+            }
+            if (localStream) {
+                localStream.getTracks().forEach(track => track.stop());
+                localStream = null;
+            }
+            chatLog.innerHTML += `<div class="ai-msg" style="color: #ffaa00"><b>SYSTEM:</b> ${message}</div>`;
+            chatLog.scrollTop = chatLog.scrollHeight;
+            statusEl.innerText = "System Stopped. Click orb to restart.";
+            orb.className = "orb";
+            orb.style.background = "";
+            orb.style.boxShadow = "none";
+            isSystemActive = false;
+            isSpeaking = false;
+            isRecording = false;
+        }
+
+        async function startSystem() {
+            if (isSystemActive) {
+                stopSystem("Agent Paused by User.");
+                return;
+            }
+
+            isSystemActive = true;
+            statusEl.innerText = "Connecting to microphone...";
+            orb.style.background = "";
+            orb.style.boxShadow = "";
+            
+            try {
+                localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                
+                mediaRecorder = new MediaRecorder(localStream);
+                mediaRecorder.ondataavailable = e => { audioChunks.push(e.data); };
+                mediaRecorder.onstop = processAudio;
+                
+                const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                const analyser = audioContext.createAnalyser();
+                const microphone = audioContext.createMediaStreamSource(localStream);
+                const javascriptNode = audioContext.createScriptProcessor(2048, 1, 1);
+                
+                analyser.smoothingTimeConstant = 0.8;
+                analyser.fftSize = 1024;
+                
+                microphone.connect(analyser);
+                analyser.connect(javascriptNode);
+                javascriptNode.connect(audioContext.destination);
+                
+                statusEl.innerText = "Listening... (Auto-stops on silence)";
+                orb.className = "orb listening";
+                
+                javascriptNode.onaudioprocess = function() {
+                    if (isSpeaking) return; 
+                    if (!isSystemActive) return; 
+                    
+                    const array = new Uint8Array(analyser.frequencyBinCount);
+                    analyser.getByteFrequencyData(array);
+                    let values = 0;
+                    for (let i = 0; i < array.length; i++) { values += (array[i]); }
+                    const average = values / array.length;
+                    
+                    if (average > 15) {
+                        clearTimeout(silenceTimer);
+                        if (!isRecording) {
+                            audioChunks = [];
+                            mediaRecorder.start();
+                            isRecording = true;
+                            orb.style.transform = "scale(1.2)";
+                        }
+                        
+                        silenceTimer = setTimeout(() => {
+                            if (isRecording) {
+                                mediaRecorder.stop();
+                                isRecording = false;
+                                orb.style.transform = "scale(1)";
+                                statusEl.innerText = "Processing...";
+                                orb.className = "orb thinking";
+                            }
+                        }, 1500);
+                    }
+                }
+            } catch (err) {
+                statusEl.innerText = "Microphone access denied.";
+                isSystemActive = false;
+            }
+        }
+
+        async function processAudio() {
+            if (!isSystemActive) return;
+            isSpeaking = true;
+            
+            const audioBlob = new Blob(audioChunks, { type: 'audio/wav' });
+            const formData = new FormData();
+            formData.append("audio", audioBlob, "mic.wav");
+            
+            try {
+                // 1. Transcribe
+                const sttRes = await fetch(`${BACKEND_URL}/transcribe`, { method: "POST", body: formData });
+                const sttData = await sttRes.json();
+                const text = sttData.text ? sttData.text.trim() : "";
+                
+                if (!text) { resetListening(); return; }
+                
+                chatLog.innerHTML += `<div class="user-msg"><b>YOU:</b> ${text}</div>`;
+                chatLog.scrollTop = chatLog.scrollHeight;
+                
+                // Shutdown check
+                const cleanText = text.toLowerCase().replace(/[^a-z ]/g, "").trim();
+                if (cleanText === "stop" || cleanText === "goodbye" || cleanText === "quit" || cleanText === "exit") {
+                    stopSystem("Voice Agent Stopped via Voice Command.");
+                    return;
+                }
+                
+                // 2. LLM Chat
+                statusEl.innerText = "Thinking...";
+                const chatRes = await fetch(`${BACKEND_URL}/api/chat`, {
+                    method: "POST", headers: {"Content-Type": "application/json"},
+                    body: JSON.stringify({
+                        message: text + (activeDocContext || ""),
+                        document_id: activeDocId || ""
+                    })
+                });
+                const chatData = await chatRes.json();
+                const answer = chatData.answer || (chatData.error?.message ? "Error: " + chatData.error.message : "No response generated.");
+                
+                if (!isSystemActive) return;
+                
+                chatLog.innerHTML += `<div class="ai-msg"><b>AI:</b> ${answer}</div>`;
+
+                if (chatData.fig) {
+                    const plotDiv = document.createElement('div');
+                    plotDiv.style.width = "100%";
+                    plotDiv.style.height = "350px";
+                    plotDiv.style.marginTop = "10px";
+                    plotDiv.style.marginBottom = "20px";
+                    plotDiv.id = 'plot-' + Date.now();
+                    chatLog.appendChild(plotDiv);
+                    try {
+                        const fig = typeof chatData.fig === 'string' ? JSON.parse(chatData.fig) : chatData.fig;
+                        Plotly.newPlot(plotDiv.id, fig.data, fig.layout, {responsive: true});
+                    } catch (e) {
+                        console.warn("Could not render chart", e);
+                    }
+                }
+                chatLog.scrollTop = chatLog.scrollHeight;
+                
+                // 3. TTS Speak
+                statusEl.innerText = "Speaking... (Click orb to pause system)";
+                const ttsRes = await fetch(`${BACKEND_URL}/speak`, {
+                    method: "POST", headers: {"Content-Type": "application/json"},
+                    body: JSON.stringify({message: answer})
+                });
+                const ttsData = await ttsRes.json();
+                
+                if (!isSystemActive) return;
+                
+                if (ttsData.audio_base64) {
+                    currentAudio = new Audio("data:" + ttsData.content_type + ";base64," + ttsData.audio_base64);
+                    currentAudio.play();
+                    
+                    currentAudio.onended = () => { 
+                        currentAudio = null;
+                        if (isSystemActive) resetListening(); 
+                    };
+                } else {
+                    if (isSystemActive) resetListening();
+                }
+                
+            } catch (err) {
+                console.error(err);
+                chatLog.innerHTML += `<div class="user-msg" style="color:red">Error communicating with backend.</div>`;
+                if (isSystemActive) resetListening();
+            }
+        }
+        
+        function resetListening() {
+            if (!isSystemActive) return;
+            isSpeaking = false;
+            statusEl.innerText = "Listening... (Auto-stops on silence)";
+            orb.className = "orb listening";
+        }
+    
+        async function generateChart() {
+            const fileInput = document.getElementById('file-upload');
+            const file = fileInput.files[0];
+            const xCol = document.getElementById('x-axis-select').value;
+            const yCol = document.getElementById('y-axis-select').value;
+            
+            if (!file || !xCol || !yCol) {
+                alert("Please select a file, X-axis, and Y-axis.");
+                return;
+            }
+
+            statusEl.innerText = "Analyzing data and generating chart...";
+            
+            const formData = new FormData();
+            formData.append("file", file);
+            formData.append("time_col", xCol);
+            formData.append("val_col", yCol);
+
+            try {
+                const res = await fetch(`${BACKEND_URL}/analyze_csv`, { method: "POST", body: formData });
+                const data = await res.json();
+
+                if (res.ok) {
+                    statusEl.innerText = "Chart generated successfully!";
+                    
+                    // Add explanation to chat
+                    const aiMsg = document.createElement('div');
+                    aiMsg.className = 'ai-msg';
+                    aiMsg.innerHTML = '<strong>System:</strong><br/>' + data.explanation;
+                    chatLog.appendChild(aiMsg);
+                    
+                    // Create Plotly div
+                    const plotDiv = document.createElement('div');
+                    plotDiv.style.width = "100%";
+                    plotDiv.style.height = "350px";
+                    plotDiv.style.marginTop = "10px";
+                    plotDiv.style.marginBottom = "20px";
+                    plotDiv.id = 'plot-' + Date.now();
+                    chatLog.appendChild(plotDiv);
+                    
+                    chatLog.scrollTop = chatLog.scrollHeight;
+                    
+                    // Render Plotly chart
+                    const fig = JSON.parse(data.fig_json);
+                    Plotly.newPlot(plotDiv.id, fig.data, fig.layout, {responsive: true});
+                    
+                    chatLog.scrollTop = chatLog.scrollHeight;
+
+                    // Play audio
+                    if (data.audio_base64) {
+                        const audioBlob = b64toBlob(data.audio_base64, data.content_type);
+                        const audioUrl = URL.createObjectURL(audioBlob);
+                        if (currentAudio) currentAudio.pause();
+                        currentAudio = new Audio(audioUrl);
+                        currentAudio.play();
+                    }
+                } else {
+                    statusEl.innerText = "Error: " + (data.detail || "Analysis failed");
+                }
+            } catch (err) {
+                console.error(err);
+                statusEl.innerText = "Failed to generate chart.";
+            }
+        }
+        
+        function b64toBlob(b64Data, contentType='', sliceSize=512) {
+            const byteCharacters = atob(b64Data);
+            const byteArrays = [];
+            for (let offset = 0; offset < byteCharacters.length; offset += sliceSize) {
+                const slice = byteCharacters.slice(offset, offset + sliceSize);
+                const byteNumbers = new Array(slice.length);
+                for (let i = 0; i < slice.length; i++) {
+                    byteNumbers[i] = slice.charCodeAt(i);
+                }
+                const byteArray = new Uint8Array(byteNumbers);
+                byteArrays.push(byteArray);
+            }
+            return new Blob(byteArrays, {type: contentType});
+        }
+
+    </script>
+</body>
+</html>

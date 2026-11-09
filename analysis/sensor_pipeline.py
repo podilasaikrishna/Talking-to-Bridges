@@ -224,19 +224,34 @@ def _looks_like_hour_minute(raw: pd.DataFrame) -> bool:
 
 
 def _read_raw(content: bytes, name: str) -> pd.DataFrame:
-    """Read a headerless workbook (first sheet) or CSV into a raw DataFrame."""
+    """Read a headerless workbook (first sheet) or CSV into a raw DataFrame.
+
+    Both .xlsx and .xlsm are explicitly routed through openpyxl so that
+    macro-enabled workbooks (.xlsm) are handled correctly regardless of which
+    engine pandas would otherwise pick as its default.  Macros are silently
+    ignored by openpyxl – only the data is read.
+    """
     extension = Path(name).suffix.lower()
     try:
         if extension == ".csv":
             return pd.read_csv(io.BytesIO(content), header=None)
         if extension in (".xlsx", ".xlsm"):
-            return pd.read_excel(io.BytesIO(content), header=None, sheet_name=0)
+            # engine='openpyxl' is pinned explicitly:
+            #   • .xlsx – ensures consistent behaviour across pandas versions.
+            #   • .xlsm – macro-enabled workbooks; openpyxl reads data only,
+            #              macros are ignored (which is exactly what we want).
+            return pd.read_excel(
+                io.BytesIO(content),
+                header=None,
+                sheet_name=0,
+                engine="openpyxl",
+            )
     except pd.errors.EmptyDataError as exc:
         raise SensorDataError(f"'{name}' is empty.") from exc
-    except ImportError as exc:  # openpyxl missing
+    except ImportError as exc:  # openpyxl not installed
         raise SensorDataError(
-            f"Cannot read '{name}': {exc}. Install the requirements "
-            "(pip install -r requirements.txt)."
+            f"Cannot read '{name}': openpyxl is required for .xlsx/.xlsm files "
+            f"but is not installed ({exc}). Run: pip install openpyxl"
         ) from exc
     except Exception as exc:  # corrupt workbook etc.
         raise SensorDataError(f"Could not read '{name}': {exc}") from exc

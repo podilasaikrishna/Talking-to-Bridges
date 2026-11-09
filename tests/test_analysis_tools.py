@@ -48,20 +48,20 @@ class TestToolRegistry:
     def test_unknown_tool_raises_structured_error(self):
         res = registry.execute("non_existent_tool", {})
         assert res["status"] == "error"
-        assert res["error_type"] == "ToolNotFound"
+        assert res["error_type"] == "UNKNOWN_TOOL"
         assert "non_existent_tool" in res["message"]
 
     def test_input_schema_validation_missing_param(self):
         res = registry.execute("summary_statistics", {})
         assert res["status"] == "error"
-        assert res["error_type"] == "InvalidParameter"
+        assert res["error_type"] == "INVALID_INPUT"
         assert "metric" in res["message"]
 
     def test_dataset_aware_column_validation(self):
         df = pd.DataFrame({"temperature": [31.2, 32.1], "sensor_id": ["S01", "S01"]})
         res = registry.execute("summary_statistics", {"metric": "non_existent_column"}, df=df)
         assert res["status"] == "error"
-        assert res["error_type"] == "InvalidParameter"
+        assert res["error_type"] == "INVALID_INPUT"
         assert "non_existent_column" in res["message"]
 
     def test_successful_dummy_tool_execution(self):
